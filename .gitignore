@@ -1,0 +1,46 @@
+# Node.js
+node_modules/
+.env
+.env.*
+build/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+*.venv
+venv/
+ENV/
+env/
+
+# Log files
+*.log
+
+# Editor directories and files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# System files
+*.swp
+*.swo
+
+# Docker
+*.pid
+*.seed
+
+# Others
+*.bak
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Ignore frontend build artifacts
+frontend/battleship-frontend/.next/
+frontend/battleship-frontend/out/
+frontend/battleship-frontend/.turbo/ 

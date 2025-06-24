@@ -1,0 +1,26 @@
+# Battle Ship Game Backend Requirements
+
+# Core dependencies - không cần cài thêm gì vì chỉ dùng built-in Python libraries
+# socket - built-in
+# threading - built-in  
+# json - built-in
+# uuid - built-in
+# time - built-in
+# enum - built-in
+# typing - built-in
+
+# Optional dependencies cho production
+websockets==9.1
+# asyncio  
+
+# Development dependencies  
+# pytest>=7.0.0  
+# black>=22.0.0  # Code formatting
+# flake8>=4.0.0  # Code linting
+
+# Monitoring dependencies (optional)
+# psutil>=5.8.0  # System monitoring
+# logging  # built-in
+
+# Note: Backend này được thiết kế để chỉ sử dụng Python standard library
+# để đảm bảo tính portable và dễ deploy
