@@ -1,10 +1,12 @@
 /**
- * Login Component - Giao diện đăng nhập và kết nối
+ * Login Component - Giao diện sảnh chờ & Chọn Hạm Đội / Chỉ Huy
  */
 
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../../contexts/GameContext';
-import { GameState } from '../../types/game';
+import { GameState, FleetType, FLEET_CONFIGS, ShipType } from '../../types/game';
+
+const FLEET_LIST: FleetType[] = ['modern', 'vintage', 'scifi'];
 
 export const Login: React.FC = () => {
   const { state, actions, dispatch } = useGame();
@@ -12,6 +14,30 @@ export const Login: React.FC = () => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [showConnecting, setShowConnecting] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [queueDuration, setQueueDuration] = useState(0);
+
+  // Bộ đếm thời gian tìm trận (MM:SS)
+  useEffect(() => {
+    let timer: any = null;
+    const isSearching = (showQueue || state.connectionState === GameState.IN_QUEUE) && !state.opponentName;
+    if (isSearching) {
+      setQueueDuration(0);
+      timer = setInterval(() => {
+        setQueueDuration(prev => prev + 1);
+      }, 1000);
+    } else {
+      setQueueDuration(0);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [showQueue, state.connectionState, state.opponentName]);
+
+  const formatDuration = (sec: number): string => {
+    const m = Math.floor(sec / 60).toString().padStart(2, '0');
+    const s = (sec % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
 
   // Khi nhập tên, hiện text đang kết nối
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -22,6 +48,12 @@ export const Login: React.FC = () => {
     } else {
       setShowConnecting(false);
     }
+  };
+
+  // Chọn hạm đội
+  const handleSelectFleet = (fleet: FleetType) => {
+    if (isConnecting || showQueue || state.connectionState === GameState.IN_QUEUE) return;
+    actions.setSelectedFleet(fleet);
   };
 
   // Khi ấn bắt đầu chơi
@@ -61,7 +93,7 @@ export const Login: React.FC = () => {
       state.playerName.trim().length > 0 &&
       state.connectionState === GameState.DISCONNECTED
     ) {
-      setShowQueue(true);         // Hiện trạng thái như vừa ấn nút
+      setShowQueue(true);
       setShowConnecting(true);
       (async () => {
         dispatch({ type: 'SET_PLAYER_NAME', payload: state.playerName });
@@ -92,44 +124,13 @@ export const Login: React.FC = () => {
   let statusText = '';
   if (showQueue || state.connectionState === GameState.IN_QUEUE) {
     if (state.opponentName) {
-      statusText = 'Đã tìm thấy đối thủ xứng tầm!';
+      statusText = 'Đã ghép trận! Đang vào phòng chuẩn bị...';
     } else {
-      statusText = 'Đang tìm đối thủ...';
+      statusText = `Đang quét tìm đối thủ... (Hàng chờ: ${state.queuePosition || 1})`;
     }
   } else if (showConnecting || state.connectionState === GameState.CONNECTING) {
-    statusText = 'Đang kết nối...';
+    statusText = 'Đang kết nối trung tâm chỉ huy...';
   }
-
-  // Connection status message
-  const getStatusMessage = () => {
-    switch (state.connectionState) {
-      case GameState.CONNECTING:
-        return 'Đang kết nối...';
-      case GameState.CONNECTED:
-        return 'Đã kết nối thành công!';
-      case GameState.IN_QUEUE:
-        return `Đang tìm đối thủ... (Vị trí: ${state.queuePosition})`;
-      case GameState.DISCONNECTED:
-        return state.error || 'Chưa kết nối';
-      default:
-        return '';
-    }
-  };
-
-  // Get status color
-  const getStatusColor = () => {
-    switch (state.connectionState) {
-      case GameState.CONNECTING:
-        return 'text-yellow-600';
-      case GameState.CONNECTED:
-      case GameState.IN_QUEUE:
-        return 'text-green-600';
-      case GameState.DISCONNECTED:
-        return 'text-red-600';
-      default:
-        return 'text-gray-600';
-    }
-  };
 
   useEffect(() => {
     // Khi vào màn hình Login, xóa clientId cũ để mỗi tab là 1 client mới
@@ -138,111 +139,312 @@ export const Login: React.FC = () => {
     }
   }, []);
 
+  const currentSelectedFleet = state.selectedFleet || 'modern';
+  const activeFleetConfig = FLEET_CONFIGS[currentSelectedFleet];
+
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Ảnh nền biển phủ full màn hình */}
-      <div className="absolute inset-0 z-0">
+    <div className="min-h-screen w-full flex items-center justify-center p-3 sm:p-6 relative overflow-y-auto select-none">
+      {/* Ocean background */}
+      <div className="fixed inset-0 z-0">
         <img src="/images/ocean-bg.png" alt="ocean background" className="w-full h-full object-cover" />
       </div>
-      {/* Overlay tối nhẹ để dễ nhìn chữ */}
-      <div className="absolute inset-0 bg-blue-900 bg-opacity-40 z-10"></div>
-      {/* Background effects */}
-      <div className="absolute inset-0 overflow-hidden z-20 pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-400 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse"></div>
-        <div className="absolute top-3/4 right-1/4 w-96 h-96 bg-blue-300 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse animation-delay-2000"></div>
+      {/* Dark overlay */}
+      <div className="fixed inset-0 bg-slate-950/75 z-10"></div>
+      
+      {/* Glowing backdrop elements */}
+      <div className="fixed inset-0 overflow-hidden z-20 pointer-events-none">
+        <div className="absolute -top-20 left-1/4 w-[500px] h-[500px] bg-blue-500/10 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute -bottom-20 right-1/4 w-[500px] h-[500px] bg-indigo-500/10 rounded-full blur-3xl animate-pulse"></div>
       </div>
-      <div className="relative z-30 w-full max-w-md">
-        {/* Logo/Title */}
-        <div className="text-center mb-8">
-          <div className="inline-block p-4 bg-white rounded-full shadow-lg mb-4">
-            <svg className="w-12 h-12 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" />
-            </svg>
+
+      {/* Main Container */}
+      <div className="relative z-30 w-full max-w-6xl my-auto py-6">
+        
+        {/* Game Title Header */}
+        <div className="text-center mb-6 flex flex-col items-center">
+          <div className="relative mb-3 group">
+            <div className="absolute inset-0 rounded-full bg-yellow-400/20 blur-xl group-hover:blur-2xl transition-all pointer-events-none"></div>
+            <img
+              src="/logo.png"
+              alt="Battleship Combat Logo"
+              className="relative w-20 h-20 sm:w-24 sm:h-24 object-contain drop-shadow-[0_4px_16px_rgba(234,179,8,0.4)] transition-transform hover:scale-105 duration-300"
+            />
           </div>
-          <h1 className="text-4xl font-bold text-white mb-2">Battle Ship</h1>
-          <p className="text-blue-200 text-lg">Trò chơi hải chiến trực tuyến</p>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-900/60 border border-blue-500/30 text-blue-300 text-xs font-semibold uppercase tracking-widest mb-2 shadow">
+            <span>⚓</span> Chiến Lược Trực Tuyến Đa Người Chơi
+          </div>
+          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-200 via-yellow-200 to-amber-400 tracking-wider drop-shadow-md">
+            BATTLESHIP COMBAT
+          </h1>
+          <p className="text-blue-200 text-xs sm:text-sm font-medium mt-1">
+            Chọn Bộ Chỉ Huy & Hạm Đội Chiến Thuật Của Bạn Để Xuất Trận
+          </p>
         </div>
 
-        {/* Login Form */}
-        <div className="bg-white rounded-2xl shadow-2xl p-8">
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div>
-              <label htmlFor="playerName" className="block text-sm font-medium text-gray-700 mb-2">
-                Tên người chơi
-              </label>
-              <input
-                type="text"
-                id="playerName"
-                value={playerName}
-                onChange={handleNameChange}
-                placeholder="Nhập tên của bạn..."
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 text-lg"
-                required
-                minLength={2}
-                maxLength={50}
-                disabled={isConnecting || showQueue || state.connectionState === GameState.CONNECTING || state.connectionState === GameState.IN_QUEUE}
-              />
-              <div className="flex justify-between items-center mt-1">
-                <span className="text-xs text-gray-500">
-                  Tối thiểu 2 ký tự
-                </span>
-                <span className="text-xs text-gray-500">
-                  {playerName.length}/50
-                </span>
+        {/* Section 1: 3 Commander & Fleet Cards */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-3 px-1">
+            <h2 className="text-sm font-bold text-yellow-300 uppercase tracking-wider flex items-center gap-2">
+              <span>🛡️</span> 1. Chọn Hạm Đội & Chỉ Huy
+            </h2>
+            <span className="text-xs text-blue-300 italic">
+              (Mặc định: Hạm Đội Hiện Đại)
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {FLEET_LIST.map((fleetKey) => {
+              const cfg = FLEET_CONFIGS[fleetKey];
+              const isSelected = currentSelectedFleet === fleetKey;
+
+              // Border and accent styling based on fleet type
+              let cardBorderClass = 'border-slate-700/60 bg-slate-900/80 hover:border-slate-500';
+              let badgeBg = 'bg-blue-600/30 text-blue-300 border-blue-500/30';
+              let highlightGlow = '';
+
+              if (fleetKey === 'modern') {
+                if (isSelected) {
+                  cardBorderClass = 'border-cyan-400 ring-2 ring-cyan-400/50 bg-gradient-to-b from-blue-950/90 to-slate-900/90 shadow-[0_0_25px_rgba(6,182,212,0.35)]';
+                  badgeBg = 'bg-cyan-500 text-slate-950 border-cyan-300 font-bold';
+                  highlightGlow = 'from-cyan-500/20';
+                }
+              } else if (fleetKey === 'vintage') {
+                if (isSelected) {
+                  cardBorderClass = 'border-amber-400 ring-2 ring-amber-400/50 bg-gradient-to-b from-amber-950/70 to-slate-900/90 shadow-[0_0_25px_rgba(245,158,11,0.35)]';
+                  badgeBg = 'bg-amber-400 text-slate-950 border-amber-300 font-bold';
+                  highlightGlow = 'from-amber-500/20';
+                }
+              } else if (fleetKey === 'scifi') {
+                if (isSelected) {
+                  cardBorderClass = 'border-purple-400 ring-2 ring-purple-400/50 bg-gradient-to-b from-purple-950/70 to-slate-900/90 shadow-[0_0_25px_rgba(168,85,247,0.35)]';
+                  badgeBg = 'bg-purple-400 text-slate-950 border-purple-300 font-bold';
+                  highlightGlow = 'from-purple-500/20';
+                }
+              }
+
+              return (
+                <div
+                  key={fleetKey}
+                  onClick={() => handleSelectFleet(fleetKey)}
+                  className={`relative rounded-2xl p-4 cursor-pointer transition-all duration-300 border ${cardBorderClass} flex flex-col justify-between overflow-hidden group`}
+                >
+                  {/* Active selection glow gradient header */}
+                  {isSelected && (
+                    <div className={`absolute -top-10 left-0 right-0 h-24 bg-gradient-to-b ${highlightGlow} to-transparent pointer-events-none`} />
+                  )}
+
+                  {/* Header: Commander Avatar & Name */}
+                  <div className="relative z-10 flex items-start gap-3.5 mb-3">
+                    <div className="relative flex-shrink-0">
+                      <img
+                        src={cfg.commanderAvatar}
+                        alt={cfg.commanderName}
+                        className={`w-14 h-14 rounded-full object-cover border-2 shadow-lg bg-slate-950 transition-transform duration-300 ${
+                          isSelected ? 'border-yellow-400 scale-105' : 'border-slate-600'
+                        }`}
+                        draggable={false}
+                      />
+                      {isSelected && (
+                        <span className="absolute -top-1 -right-1 bg-emerald-500 text-white rounded-full p-0.5 shadow">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-xs font-bold text-yellow-400 tracking-wide uppercase truncate">
+                          {cfg.commanderName}
+                        </span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${badgeBg}`}>
+                          {isSelected ? '✓ ĐÃ CHỌN' : 'CHỌN'}
+                        </span>
+                      </div>
+                      <h3 className="text-base font-extrabold text-white truncate mt-0.5">
+                        {cfg.name}
+                      </h3>
+                      <p className="text-[11px] text-blue-200/80 truncate">
+                        {cfg.commanderTitle}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Commander Quote */}
+                  <div className="relative z-10 mb-3 bg-black/40 rounded-lg p-2 border border-white/5">
+                    <p className="text-[11px] italic text-blue-200/90 leading-tight">
+                      "{cfg.quote}"
+                    </p>
+                  </div>
+
+                  {/* Ship Showcase (4 ships) */}
+                  <div className="relative z-10 mt-auto pt-2 border-t border-white/10">
+                    <div className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>Thiết bị chiến hạm (4 lớp tàu)</span>
+                      <span className="text-yellow-400/80">Kích thước 2 - 5 ô</span>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-1.5 bg-black/30 p-2 rounded-xl border border-white/5">
+                      {/* Destroyer */}
+                      <div className="flex flex-col items-center group/ship" title="Destroyer (2 ô)">
+                        <div className="h-9 w-full flex items-center justify-center p-0.5">
+                          <img
+                            src={cfg.ships[ShipType.DESTROYER]}
+                            alt="Destroyer"
+                            className="max-h-full max-w-full object-contain filter drop-shadow group-hover/ship:scale-110 transition-transform"
+                            draggable={false}
+                          />
+                        </div>
+                        <span className="text-[9px] text-slate-400 font-medium mt-0.5">Tàu 2 ô</span>
+                      </div>
+
+                      {/* Submarine */}
+                      <div className="flex flex-col items-center group/ship" title="Submarine (3 ô)">
+                        <div className="h-9 w-full flex items-center justify-center p-0.5">
+                          <img
+                            src={cfg.ships[ShipType.SUBMARINE]}
+                            alt="Submarine"
+                            className="max-h-full max-w-full object-contain filter drop-shadow group-hover/ship:scale-110 transition-transform"
+                            draggable={false}
+                          />
+                        </div>
+                        <span className="text-[9px] text-slate-400 font-medium mt-0.5">Tàu 3 ô</span>
+                      </div>
+
+                      {/* Cruiser */}
+                      <div className="flex flex-col items-center group/ship" title="Cruiser (4 ô)">
+                        <div className="h-9 w-full flex items-center justify-center p-0.5">
+                          <img
+                            src={cfg.ships[ShipType.CRUISER]}
+                            alt="Cruiser"
+                            className="max-h-full max-w-full object-contain filter drop-shadow group-hover/ship:scale-110 transition-transform"
+                            draggable={false}
+                          />
+                        </div>
+                        <span className="text-[9px] text-slate-400 font-medium mt-0.5">Tàu 4 ô</span>
+                      </div>
+
+                      {/* Battleship */}
+                      <div className="flex flex-col items-center group/ship" title="Battleship (5 ô)">
+                        <div className="h-9 w-full flex items-center justify-center p-0.5">
+                          <img
+                            src={cfg.ships[ShipType.BATTLESHIP]}
+                            alt="Battleship"
+                            className="max-h-full max-w-full object-contain filter drop-shadow group-hover/ship:scale-110 transition-transform"
+                            draggable={false}
+                          />
+                        </div>
+                        <span className="text-[9px] text-slate-400 font-medium mt-0.5">Tàu 5 ô</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Section 2: Player Registration & Matchmaking Bar */}
+        <div className="bg-slate-900/90 backdrop-blur-md rounded-2xl p-5 sm:p-7 shadow-2xl border border-blue-700/60">
+          <form onSubmit={handleSubmit}>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-center">
+              
+              {/* Player Name Input (Col 5) */}
+              <div className="lg:col-span-5">
+                <label htmlFor="playerName" className="block text-xs font-bold text-yellow-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <span>🎖️</span> 2. Tên Người Chơi / Mật Danh
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="playerName"
+                    value={playerName}
+                    onChange={handleNameChange}
+                    placeholder="Nhập tên của bạn (tối thiểu 2 ký tự)..."
+                    className="w-full px-4 py-3 bg-slate-950/80 border border-blue-500/50 rounded-xl focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 text-white placeholder-slate-500 font-medium text-base shadow-inner transition-all"
+                    required
+                    minLength={2}
+                    maxLength={50}
+                    disabled={isConnecting || showQueue || state.connectionState === GameState.CONNECTING || state.connectionState === GameState.IN_QUEUE}
+                  />
+                  <span className="absolute right-3 top-3.5 text-xs text-slate-400">
+                    {playerName.length}/50
+                  </span>
+                </div>
+              </div>
+
+              {/* Selected Fleet Badge Review (Col 4) */}
+              <div className="lg:col-span-4 bg-slate-950/60 rounded-xl p-3 border border-blue-800/60 flex items-center gap-3">
+                <img
+                  src={activeFleetConfig.commanderAvatar}
+                  alt={activeFleetConfig.commanderName}
+                  className="w-11 h-11 rounded-full object-cover border-2 border-yellow-400 shadow bg-slate-900 flex-shrink-0"
+                  draggable={false}
+                />
+                <div className="min-w-0">
+                  <div className="text-[11px] text-blue-300 uppercase font-semibold">Đội hình sẵn sàng:</div>
+                  <div className="text-sm font-bold text-white truncate">{activeFleetConfig.name}</div>
+                  <div className="text-xs text-yellow-300 truncate">{activeFleetConfig.commanderName}</div>
+                </div>
+              </div>
+
+              {/* Action Submit Button (Col 3) */}
+              <div className="lg:col-span-3 flex flex-col justify-center">
+                <button
+                  type="submit"
+                  disabled={
+                    !playerName.trim() || isConnecting || showQueue || state.connectionState === GameState.CONNECTING || state.connectionState === GameState.IN_QUEUE
+                  }
+                  className="w-full py-3.5 px-5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl font-black tracking-wide text-base shadow-[0_0_20px_rgba(16,185,129,0.4)] disabled:from-slate-700 disabled:to-slate-800 disabled:text-slate-400 disabled:shadow-none disabled:cursor-not-allowed transition-all transform active:scale-95 border border-emerald-400/30"
+                >
+                  ⚔️ VÀO GHÉP TRẬN
+                </button>
+              </div>
+
+            </div>
+
+            {/* Queue / Status Alert */}
+            {statusText && (
+              <div className="mt-4 p-3 rounded-xl bg-blue-950/80 border border-blue-500/40 flex items-center justify-between gap-3 animate-in fade-in">
+                <div className="flex items-center gap-3 text-sm text-cyan-200 font-semibold">
+                  <span className="relative flex h-3.5 w-3.5 flex-shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-cyan-500"></span>
+                  </span>
+                  <span>{statusText}</span>
+                  {(showQueue || state.connectionState === GameState.IN_QUEUE) && !state.opponentName && (
+                    <span className="bg-blue-800/90 text-yellow-300 font-mono text-xs px-2.5 py-0.5 rounded-full border border-yellow-400/30 font-bold shadow-inner flex items-center gap-1">
+                      <span>⏱️</span> {formatDuration(queueDuration)}
+                    </span>
+                  )}
+                </div>
+                
+                {((showQueue || state.connectionState === GameState.IN_QUEUE) && !state.opponentName) && (
+                  <button
+                    type="button"
+                    onClick={handleCancelQueue}
+                    className="px-3 py-1.5 bg-red-600/80 hover:bg-red-600 text-white rounded-lg text-xs font-bold transition shadow border border-red-400/40"
+                  >
+                    ✕ Hủy tìm trận
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Quick Rules Footer */}
+            <div className="mt-5 pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between text-xs text-slate-400 gap-2">
+              <div className="flex items-center gap-4">
+                <span>📋 Quy chuẩn: <b>5 chiến hạm</b> (1 Destroyer, 2 Submarine, 1 Cruiser, 1 Battleship)</span>
+              </div>
+              <div className="text-slate-500">
+                Chế độ bảo mật: Server-Authoritative Anti-Cheat
               </div>
             </div>
 
-            {/* Nút và trạng thái */}
-            <div className="flex flex-col gap-2">
-              <button
-                type="submit"
-                disabled={
-                  !playerName.trim() || isConnecting || showQueue || state.connectionState === GameState.CONNECTING || state.connectionState === GameState.IN_QUEUE
-                }
-                className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-semibold hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all duration-200 text-lg shadow-lg"
-              >
-                Bắt đầu chơi
-              </button>
-              {statusText && (
-                <div className="text-center text-sm text-blue-700 font-medium flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="m4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  {statusText}
-                  {((showQueue || state.connectionState === GameState.IN_QUEUE) && !state.opponentName) && (
-                    <button
-                      type="button"
-                      onClick={handleCancelQueue}
-                      className="ml-3 px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-xs font-semibold border border-red-300"
-                    >
-                      Hủy
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Game Rules */}
-            <div className="mt-8 pt-6 border-t border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-800 mb-3">Luật chơi:</h3>
-              <ul className="text-sm text-gray-600 space-y-1">
-                <li>• Đặt tàu trên bảng 10x10</li>
-                <li>• 4 Destroyer (2 ô), 3 Submarine (3 ô)</li>
-                <li>• 2 Cruiser (4 ô), 1 Battleship (5 ô)</li>
-                <li>• Lần lượt bắn để tìm và chìm tàu đối thủ</li>
-                <li>• Người chìm hết tàu đối thủ trước sẽ thắng</li>
-              </ul>
-            </div>
           </form>
-
-          {/* Footer */}
-          <div className="text-center mt-6 text-blue-200">
-            <p className="text-sm">
-              Kết nối tới server: localhost:8888
-            </p>
-          </div>
         </div>
+
       </div>
     </div>
   );

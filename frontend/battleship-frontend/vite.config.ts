@@ -9,5 +9,16 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  server: {
+    host: true, // Cho phép các thiết bị cùng mạng Wi-Fi (LAN) kết nối qua IPv4
+    port: 5173,
+    proxy: {
+      "/ws": {
+        target: "ws://127.0.0.1:8888",
+        ws: true,
+        changeOrigin: true,
+      },
+    },
+  },
 })
 

@@ -3,13 +3,14 @@
  */
 
 import React, { useState } from 'react';
-import { ShipType, SHIP_CONFIGS, Position, CellState } from '../../types/game';
+import { Ship, ShipType, SHIP_CONFIGS, SHIP_IMAGES, Position, CellState, FLEET_CONFIGS } from '../../types/game';
 import { useGame } from '../../contexts/GameContext';
 import GameBoard from './GameBoard';
 
 export const ShipPlacement: React.FC = () => {
   const { state, actions, dispatch } = useGame();
-  const [selectedShipType, setSelectedShipType] = useState<ShipType | null>(null);
+  const fleetConfig = FLEET_CONFIGS[state.myFleet] || FLEET_CONFIGS.modern;
+  const [selectedShipType, setSelectedShipType] = useState<ShipType | null>(ShipType.DESTROYER);
   const [isHorizontal, setIsHorizontal] = useState(true);
   const [previewPositions, setPreviewPositions] = useState<Position[]>([]);
   const [waitingForOpponent, setWaitingForOpponent] = useState(false);
@@ -89,15 +90,9 @@ export const ShipPlacement: React.FC = () => {
     return board;
   };
 
-  // Get ship icon
+  // Get ship icon from selected fleet theme
   const getShipIcon = (shipType: ShipType): string => {
-    const iconMap = {
-      [ShipType.DESTROYER]: '/images/destroyer-icon.jpg',
-      [ShipType.SUBMARINE]: '/images/submarine-icon.jpg',
-      [ShipType.CRUISER]: '/images/cruiser-icon.jpg',
-      [ShipType.BATTLESHIP]: '/images/battleship-icon.jpg'
-    };
-    return iconMap[shipType];
+    return fleetConfig.ships[shipType] || SHIP_IMAGES[shipType] || '/images/ships/modern/destroyer.png';
   };
 
   // Khi nhấn Hoàn thành đặt tàu
@@ -119,83 +114,182 @@ export const ShipPlacement: React.FC = () => {
 
   // Khi nhấn Hủy chờ đối thủ
   const handleCancelWaiting = () => {
-    // Không resetGame, chỉ quay lại màn hình đặt tàu với các tàu đã đặt giữ nguyên
     setWaitingForOpponent(false);
   };
 
-  return (
-    <div className="relative w-full min-h-screen flex items-center justify-center p-4 overflow-auto">
-      {/* Overlay và nền CHỈ render khi component này thực sự được render (đảm bảo không bị giữ lại khi chuyển màn hình) */}
-      {true && (
-        <>
-          <div className="fixed inset-0 z-0 h-screen w-screen pointer-events-none">
-            <img src="/images/ocean-bg.png" alt="ocean background" className="w-full h-full object-cover" />
-          </div>
-          <div className="fixed inset-0 bg-blue-900 bg-opacity-40 pointer-events-none h-screen w-screen"></div>
-        </>
-      )}
+  // Thuật toán xếp tàu tự động (Random) đảm bảo 100% trong phạm vi 10x10 ô và không đè lên nhau
+  const handleRandomPlacement = () => {
+    const shipsToPlace: { type: ShipType; size: number }[] = [
+      { type: ShipType.BATTLESHIP, size: 5 },
+      { type: ShipType.CRUISER, size: 4 },
+      { type: ShipType.SUBMARINE, size: 3 },
+      { type: ShipType.SUBMARINE, size: 3 },
+      { type: ShipType.DESTROYER, size: 2 },
+    ];
 
-      {/* Nút hoàn thành đặt tàu ở góc trên bên phải */}
-      <div className="absolute top-8 right-8 z-20 flex flex-col items-end gap-2">
+    for (let attempt = 0; attempt < 300; attempt++) {
+      const occupied = new Set<string>();
+      const placed: Ship[] = [];
+      let allFitted = true;
+
+      for (const shipDef of shipsToPlace) {
+        let placedThisShip = false;
+
+        for (let t = 0; t < 100; t++) {
+          const horizontal = Math.random() < 0.5;
+          const maxRow = horizontal ? 10 : 10 - shipDef.size;
+          const maxCol = horizontal ? 10 - shipDef.size : 10;
+          const startRow = Math.floor(Math.random() * maxRow);
+          const startCol = Math.floor(Math.random() * maxCol);
+
+          const positions: Position[] = [];
+          let collision = false;
+
+          for (let i = 0; i < shipDef.size; i++) {
+            const r = horizontal ? startRow : startRow + i;
+            const c = horizontal ? startCol + i : startCol;
+            if (r < 0 || r >= 10 || c < 0 || c >= 10 || occupied.has(`${r},${c}`)) {
+              collision = true;
+              break;
+            }
+            positions.push({ row: r, col: c });
+          }
+
+          if (!collision) {
+            positions.forEach(p => occupied.add(`${p.row},${p.col}`));
+            placed.push({
+              type: shipDef.type,
+              positions,
+              isHorizontal: horizontal
+            });
+            placedThisShip = true;
+            break;
+          }
+        }
+
+        if (!placedThisShip) {
+          allFitted = false;
+          break;
+        }
+      }
+
+      if (allFitted && placed.length === 5) {
+        actions.setAllPlacedShips(placed);
+        setSelectedShipType(null);
+        setPreviewPositions([]);
+        return;
+      }
+    }
+  };
+
+  // Xóa toàn bộ tàu đã xếp
+  const handleClearAll = () => {
+    actions.resetPlacement();
+    setSelectedShipType(ShipType.DESTROYER);
+    setPreviewPositions([]);
+  };
+
+  return (
+    <div className="relative w-full min-h-screen flex items-center justify-center p-4 overflow-auto select-none">
+      {/* Fixed background layer (z-0) */}
+      <div 
+        className="fixed inset-0 z-0 bg-cover bg-center pointer-events-none"
+        style={{ backgroundImage: "url('/images/ocean-bg.png')" }}
+      />
+      <div className="fixed inset-0 z-0 bg-blue-950/70 pointer-events-none" />
+
+      {/* Action button in top right */}
+      <div className="fixed top-6 right-6 z-20 flex flex-col items-end gap-2">
         {allShipsPlaced && !waitingForOpponent && (
           <button
             onClick={handleCompletePlacement}
-            className="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold shadow-lg hover:bg-green-700 transition-all duration-200"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-bold shadow-2xl transition-all duration-200 transform hover:scale-105 border border-emerald-400/50 flex items-center gap-2"
           >
-            Hoàn thành đặt tàu
+            ✓ Sẵn sàng chiến đấu
           </button>
         )}
         {waitingForOpponent && (
-          <div className="bg-yellow-100 text-yellow-800 px-4 py-2 rounded-lg font-medium shadow">Đang chờ đối thủ...</div>
+          <div className="bg-yellow-400 text-yellow-950 px-5 py-2.5 rounded-xl font-bold shadow-lg border border-yellow-200 flex items-center gap-2 animate-pulse">
+            <span className="w-2.5 h-2.5 bg-yellow-900 rounded-full animate-ping" />
+            Đang chờ đối thủ bố trí tàu...
+          </div>
         )}
       </div>
 
-      {/* Nội dung đặt tàu: panel chọn thuyền + GameBoard */}
-      <div className="relative z-20 w-full flex flex-col lg:flex-row gap-8 items-start justify-center h-full lg:items-start lg:justify-center">
-        {/* Panel chọn thuyền - bên trái trên PC, phía trên trên mobile */}
-        <div className="w-full max-w-lg lg:max-w-xs bg-blue-800 rounded-lg p-6 shadow-lg bg-opacity-80 backdrop-blur-md mb-6 lg:mb-0 max-h-[80vh] overflow-y-auto">
-          <h2 className="text-2xl font-bold text-white mb-6 text-center">Đặt Tàu Chiến</h2>
-          {/* Nếu đang chờ đối thủ thì chỉ hiện thông báo và nút Hủy */}
+      {/* Main Placement Container (z-10) */}
+      <div className="relative z-10 w-full max-w-6xl flex flex-col lg:flex-row gap-6 items-center lg:items-start justify-center py-8">
+        
+        {/* Panel chọn thuyền - bên trái */}
+        <div className="w-full max-w-md lg:w-96 bg-blue-900/90 rounded-2xl p-5 shadow-2xl border border-blue-700/60 max-h-[85vh] overflow-y-auto">
+          {/* Commander Greeting */}
+          <div className="flex items-center gap-3.5 mb-5 pb-4 border-b border-blue-700/50">
+            <img 
+              src={fleetConfig.commanderAvatar} 
+              alt={fleetConfig.commanderName} 
+              className="w-14 h-14 rounded-full object-cover border-2 border-yellow-400 shadow bg-slate-950 flex-shrink-0"
+              draggable={false}
+            />
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-black text-white tracking-wide">BỐ TRÍ HẠM ĐỘI</h2>
+                <span className="text-[10px] bg-yellow-400/20 text-yellow-300 font-bold px-1.5 py-0.5 rounded border border-yellow-400/40">
+                  {fleetConfig.name}
+                </span>
+              </div>
+              <p className="text-xs text-blue-200">
+                {fleetConfig.commanderName} - <b className="text-yellow-300">{state.playerName || 'Chỉ huy'}</b>
+              </p>
+              <p className="text-[11px] text-blue-300/80 italic mt-0.5 line-clamp-1">"{fleetConfig.quote}"</p>
+            </div>
+          </div>
+
           {waitingForOpponent ? (
-            <div className="flex flex-col items-center gap-6 mt-12">
-              <div className="text-white text-lg font-semibold text-center">Chờ đối thủ đặt tàu...</div>
+            <div className="flex flex-col items-center gap-5 my-8">
+              <div className="text-blue-100 text-base font-semibold text-center">
+                Toàn bộ tàu chiến đã vào vị trí.<br/>Đang kết nối tín hiệu với đối thủ...
+              </div>
               <button
                 onClick={handleCancelWaiting}
-                className="bg-red-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-red-700 transition-colors shadow-lg"
+                className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors shadow"
               >
-                Hủy
+                Hủy & Điều chỉnh lại
               </button>
             </div>
           ) : (
             <>
               {/* Orientation Toggle */}
-              <div className="mb-6">
-                <label className="block text-white text-sm font-medium mb-2">Hướng đặt tàu:</label>
+              <div className="mb-5">
+                <label className="block text-blue-200 text-xs font-bold mb-2 uppercase tracking-wider">
+                  Hướng đặt tàu:
+                </label>
                 <div className="flex gap-2">
                   <button
+                    type="button"
                     onClick={() => setIsHorizontal(true)}
-                    className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+                    className={`flex-1 py-2 px-3 rounded-lg font-bold text-sm transition-all ${
                       isHorizontal 
-                        ? 'bg-blue-600 text-white' 
-                        : 'bg-blue-200 text-blue-800 hover:bg-blue-300'
+                        ? 'bg-blue-600 text-white shadow-md border border-blue-400' 
+                        : 'bg-blue-950/60 text-blue-200 hover:bg-blue-800/60 border border-blue-800'
                     }`}
                   >
                     Ngang →
                   </button>
                   <button
+                    type="button"
                     onClick={() => setIsHorizontal(false)}
-                    className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+                    className={`flex-1 py-2 px-3 rounded-lg font-bold text-sm transition-all ${
                       !isHorizontal 
-                        ? 'bg-blue-600 text-white' 
-                        : 'bg-blue-200 text-blue-800 hover:bg-blue-300'
+                        ? 'bg-blue-600 text-white shadow-md border border-blue-400' 
+                        : 'bg-blue-950/60 text-blue-200 hover:bg-blue-800/60 border border-blue-800'
                     }`}
                   >
                     Dọc ↓
                   </button>
                 </div>
               </div>
-              {/* Ship Types */}
-              <div className="space-y-4 mb-6">
+
+              {/* Ship Types list */}
+              <div className="space-y-3 mb-5">
                 {Object.entries(SHIP_CONFIGS).map(([shipType, config]) => {
                   const availableCount = state.availableShips[shipType as ShipType];
                   const isSelected = selectedShipType === shipType;
@@ -203,29 +297,37 @@ export const ShipPlacement: React.FC = () => {
                   return (
                     <button
                       key={shipType}
+                      type="button"
                       onClick={() => handleShipSelect(shipType as ShipType)}
                       disabled={isDisabled}
-                      className={`w-full p-4 rounded-lg border-2 transition-all duration-200 ${
+                      className={`w-full p-3 rounded-xl border-2 transition-all duration-150 text-left ${
                         isSelected
-                          ? 'border-yellow-400 bg-yellow-100 shadow-lg transform scale-105'
+                          ? 'border-yellow-400 bg-blue-800/90 shadow-lg ring-2 ring-yellow-400/30'
                           : isDisabled
-                          ? 'border-gray-500 bg-gray-300 opacity-50 cursor-not-allowed'
-                          : 'border-blue-300 bg-white hover:border-blue-500 hover:shadow-md hover:scale-102'
+                          ? 'border-slate-700/50 bg-slate-900/40 opacity-40 cursor-not-allowed'
+                          : 'border-blue-700/60 bg-blue-950/50 hover:border-blue-500 hover:bg-blue-900/40'
                       }`}
                     >
                       <div className="flex items-center gap-3">
-                        <img 
-                          src={getShipIcon(shipType as ShipType)} 
-                          alt={config.name}
-                          className="w-12 h-8 object-cover rounded"
-                        />
-                        <div className="flex-1 text-left">
-                          <div className="font-semibold text-gray-800">{config.name}</div>
-                          <div className="text-sm text-gray-600">
-                            Kích thước: {config.size} ô
+                        <div className="w-20 h-11 bg-slate-950/80 rounded-lg flex items-center justify-center p-1 border border-blue-700/40 flex-shrink-0">
+                          <img 
+                            src={getShipIcon(shipType as ShipType)} 
+                            alt={config.name}
+                            className="max-w-full max-h-full object-contain filter drop-shadow"
+                            draggable={false}
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-white text-sm truncate flex items-center justify-between">
+                            <span>{config.name}</span>
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                              availableCount > 0 ? 'bg-blue-700 text-blue-100' : 'bg-slate-700 text-slate-400'
+                            }`}>
+                              x{availableCount}
+                            </span>
                           </div>
-                          <div className="text-sm text-gray-600">
-                            Còn lại: {availableCount}
+                          <div className="text-xs text-blue-300 mt-0.5">
+                            Chiều dài: <b className="text-yellow-300">{config.size} ô</b>
                           </div>
                         </div>
                       </div>
@@ -233,32 +335,23 @@ export const ShipPlacement: React.FC = () => {
                   );
                 })}
               </div>
-              {/* Instructions */}
-              <div className="bg-blue-100 p-4 rounded-lg mb-6">
-                <h3 className="font-semibold text-blue-800 mb-2">Hướng dẫn:</h3>
-                <ul className="text-sm text-blue-700 space-y-1">
-                  <li>1. Chọn loại tàu từ danh sách</li>
-                  <li>2. Chọn hướng đặt (ngang/dọc)</li>
-                  <li>3. Nhấp vào bảng để đặt tàu</li>
-                  <li>4. Nhấp vào tàu đã đặt để xóa</li>
-                </ul>
-              </div>
+
               {/* Placed Ships List */}
               {state.placedShips.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="font-semibold text-white mb-2">Tàu đã đặt:</h3>
-                  <div className="space-y-2">
+                <div className="mb-4 pt-3 border-t border-blue-700/50">
+                  <h3 className="text-xs font-bold text-blue-200 mb-2 uppercase tracking-wider">Tàu đã đặt ({state.placedShips.length}/5):</h3>
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
                     {state.placedShips.map((ship, index) => (
                       <div
                         key={index}
-                        className="flex items-center justify-between bg-blue-100 p-2 rounded"
+                        className="flex items-center justify-between bg-blue-950/70 px-3 py-1.5 rounded-lg border border-blue-800 text-xs"
                       >
-                        <span className="text-sm text-blue-800">
-                          {SHIP_CONFIGS[ship.type].name}
+                        <span className="text-blue-100 font-medium">
+                          {SHIP_CONFIGS[ship.type].name} ({ship.isHorizontal ? 'Ngang' : 'Dọc'})
                         </span>
                         <button
                           onClick={() => actions.removeShip(index)}
-                          className="text-red-600 hover:text-red-800 text-xs px-2 py-1 bg-red-100 rounded hover:bg-red-200"
+                          className="text-red-400 hover:text-red-300 font-bold px-2 py-0.5 rounded hover:bg-red-950/60 transition-colors"
                         >
                           Xóa
                         </button>
@@ -270,34 +363,61 @@ export const ShipPlacement: React.FC = () => {
             </>
           )}
         </div>
-        {/* GameBoard căn giữa tuyệt đối trên PC */}
-        <div className="w-full max-w-lg mx-auto flex flex-col justify-center items-center">
-          <div className="w-full bg-white bg-opacity-30 rounded-lg p-4 backdrop-blur-md flex flex-col items-center">
+
+        {/* GameBoard căn giữa */}
+        <div className="flex-1 max-w-lg flex flex-col items-center">
+          <div className="w-full bg-slate-900/40 rounded-2xl p-5 shadow-2xl border border-blue-500/20 backdrop-blur-sm flex flex-col items-center">
+            {/* Quick Actions: Xếp tự động & Xóa tất cả */}
+            {!waitingForOpponent && (
+              <div className="flex items-center justify-between w-full max-w-sm mb-3.5 gap-2">
+                <button
+                  type="button"
+                  onClick={handleRandomPlacement}
+                  className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs sm:text-sm shadow-[0_0_15px_rgba(99,102,241,0.4)] border border-purple-400/40 flex items-center justify-center gap-1.5 transition-all transform active:scale-95"
+                >
+                  <span className="text-base">🎲</span> Xếp Tự Động (Random)
+                </button>
+                {state.placedShips.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAll}
+                    className="py-2 px-3 rounded-xl bg-slate-800/90 hover:bg-red-900/80 text-slate-300 hover:text-white font-bold text-xs sm:text-sm shadow border border-slate-700/60 flex items-center justify-center gap-1 transition-all"
+                  >
+                    <span>🗑️</span> Xóa hết
+                  </button>
+                )}
+              </div>
+            )}
+
             <GameBoard
               board={getBoardWithPreview()}
+              placedShips={state.placedShips}
               onCellClick={waitingForOpponent ? undefined : handleCellClick}
               onCellHover={waitingForOpponent ? undefined : handleCellHover}
               onCellLeave={waitingForOpponent ? undefined : handleCellLeave}
-              className="mx-auto"
+              className="mx-auto text-center"
             />
+
             {/* Progress */}
-            <div className="mt-6 text-center w-full">
-              <div className="text-white text-lg font-medium mb-2">
-                Tiến độ: {state.placedShips.length} / {Object.values(SHIP_CONFIGS).reduce((total, config) => total + config.count, 0)} tàu
+            <div className="mt-5 text-center w-full max-w-sm">
+              <div className="text-blue-100 text-sm font-semibold mb-2 flex justify-between">
+                <span>Tiến độ bố trí:</span>
+                <span className="text-yellow-300 font-bold">{state.placedShips.length} / 5 tàu</span>
               </div>
-              <div className="w-full bg-blue-200 rounded-full h-3">
+              <div className="w-full bg-blue-950/80 rounded-full h-3 border border-blue-800 overflow-hidden">
                 <div 
-                  className="bg-green-500 h-3 rounded-full transition-all duration-300"
+                  className="bg-emerald-500 h-full rounded-full transition-all duration-300 shadow"
                   style={{ 
-                    width: `${(state.placedShips.length / Object.values(SHIP_CONFIGS).reduce((total, config) => total + config.count, 0)) * 100}%` 
+                    width: `${(state.placedShips.length / 5) * 100}%` 
                   }}
-                ></div>
+                />
               </div>
             </div>
+
             {selectedShipType && !waitingForOpponent && (
-              <div className="mt-4 text-center w-full">
-                <div className="inline-block bg-yellow-400 text-yellow-900 px-4 py-2 rounded-lg font-medium">
-                  Đang đặt: {SHIP_CONFIGS[selectedShipType].name} ({SHIP_CONFIGS[selectedShipType].size} ô)
+              <div className="mt-3 text-center">
+                <div className="inline-block bg-yellow-400/95 text-yellow-950 px-4 py-1.5 rounded-lg text-xs font-bold shadow">
+                  Đang chọn: {SHIP_CONFIGS[selectedShipType].name} ({SHIP_CONFIGS[selectedShipType].size} ô) - {isHorizontal ? 'Ngang' : 'Dọc'}
                 </div>
               </div>
             )}

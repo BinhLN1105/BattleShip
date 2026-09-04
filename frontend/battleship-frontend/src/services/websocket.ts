@@ -16,12 +16,19 @@ export class WebSocketService {
     "disconnected";
 
   constructor(url?: string) {
-    // Thay đổi tham số url thành optional
-    // Xây dựng URL động dựa trên host hiện tại của trình duyệt
-    // và thêm đường dẫn '/ws/' mà Nginx sẽ proxy.
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = window.location.host; // Lấy host và port của Nginx (ví dụ: localhost:80 hoặc example.com)
-    this.url = url || `${protocol}//${host}/ws/`; // Sử dụng URL được truyền vào hoặc URL động
+    if (url) {
+      this.url = url;
+    } else {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const hostname = window.location.hostname || "localhost";
+      // Nếu đang chạy dev (Vite 5173 / 3000), kết nối trực tiếp đến backend port 8888
+      if (window.location.port === "5173" || window.location.port === "3000") {
+        this.url = `${protocol}//${hostname}:8888/ws/`;
+      } else {
+        const host = window.location.host; // Môi trường Docker / Production Nginx port 80
+        this.url = `${protocol}//${host}/ws/`;
+      }
+    }
   }
 
   // Kết nối WebSocket
@@ -112,8 +119,6 @@ export class WebSocketService {
   private handleMessage(data: string) {
     try {
       const message: Message = JSON.parse(data);
-      console.log("Received message:", message);
-
       this.triggerHandler(message.type, message.data);
     } catch (error) {
       console.error("Failed to parse message:", error);
@@ -143,10 +148,10 @@ export class WebSocketService {
   // API Methods - Gửi các loại message cụ thể
 
   // Tham gia queue
-  joinQueue(playerName: string) {
+  joinQueue(playerName: string, fleet: string = 'modern') {
     this.send({
       type: "join_queue",
-      data: { player_name: playerName },
+      data: { player_name: playerName, fleet },
     });
   }
 

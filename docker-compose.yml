@@ -1,20 +1,52 @@
-version: "3.8" # Sử dụng phiên bản Docker Compose mới nhất
+﻿version: "3.8"
 
 services:
+  # Service cho Cơ sở dữ liệu PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: battleship_postgres
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-battleship_secret_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-battleship}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-battleship}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   # Service cho Backend
   backend:
     build:
-      context: ./backend # Đường dẫn đến thư mục chứa Dockerfile của backend
+      context: ./backend
       dockerfile: Dockerfile
+    container_name: battleship_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
     ports:
-      - "8888:8888" # Map port 8888 của host tới port 8888 của container
+      - "${BATTLESHIP_PORT:-8888}:8888"
     environment:
-      # Các biến môi trường cho backend, có thể đặt ở đây hoặc trong Dockerfile
-      # Những biến trong Dockerfile đã là mặc định, ở đây nếu muốn ghi đè
       - BATTLESHIP_HOST=0.0.0.0
       - BATTLESHIP_PORT=8888
       - BATTLESHIP_ENV=production
       - BATTLESHIP_LOG_LEVEL=INFO
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-battleship_secret_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-battleship}
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -27,25 +59,25 @@ services:
       timeout: 10s
       start_period: 5s
       retries: 3
-    restart: unless-stopped # Tự động khởi động lại container nếu bị dừng
-    # volumes:
-    # Tùy chọn: Nếu bạn muốn thay đổi mã nguồn backend mà không cần build lại image
-    # - ./backend:/app
-    # - /app/requirements.txt # Để tránh overwrite file này nếu đã copy vào image
 
   # Service cho Frontend
   frontend:
     build:
-      context: ./frontend/battleship-frontend # Đường dẫn đến thư mục chứa Dockerfile của frontend
+      context: ./frontend/battleship-frontend
       dockerfile: Dockerfile
+    container_name: battleship_frontend
+    restart: unless-stopped
     ports:
-      - "80:80" # Map port 80 của host tới port 80 của container (HTTP mặc định)
+      - "80:80"
     depends_on:
-      - backend # Đảm bảo backend được khởi động trước frontend
+      - backend
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/"]
       interval: 30s
       timeout: 10s
       start_period: 5s
       retries: 3
-    restart: unless-stopped # Tự động khởi động lại container nếu bị dừng
+
+volumes:
+  postgres_data:
+    driver: local

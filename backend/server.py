@@ -260,13 +260,20 @@ class BattleShipServer:
             result = room.fire_shot(client_id, row, col)
             
             # Gửi kết quả cho cả 2 player
-            shot_result_msg = create_message(MessageType.SHOT_RESULT, {
+            shot_data = {
                 'shooter': client_id,
                 'row': row,
                 'col': col,
                 'result': result['result'],  # 'miss', 'hit', 'sunk'
                 'current_turn': room.current_player.player_id
-            })
+            }
+            if result.get('result') == 'sunk':
+                shot_data['sunk_ship'] = {
+                    'type': result.get('ship_type'),
+                    'positions': result.get('ship_positions')
+                }
+            
+            shot_result_msg = create_message(MessageType.SHOT_RESULT, shot_data)
             
             self.send_to_client(room.player1.player_id, shot_result_msg)
             self.send_to_client(room.player2.player_id, shot_result_msg)

@@ -11,6 +11,7 @@
 
 # Optional dependencies cho production
 websockets==9.1
+asyncpg>=0.29.0
 # asyncio  
 
 # Development dependencies  

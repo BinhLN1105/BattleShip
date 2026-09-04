@@ -2,10 +2,11 @@
  * Main App Component - Battle Ship Game
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { GameProvider, useGame } from './contexts/GameContext';
 import { GameState } from './types/game';
 import Login from './components/game/Login';
+import MatchIntro from './components/game/MatchIntro';
 import ShipPlacement from './components/game/ShipPlacement';
 import GameInterface from './components/game/GameInterface';
 import './App.css';
@@ -13,6 +14,42 @@ import './App.css';
 // Main App Content
 const AppContent: React.FC = () => {
   const { state } = useGame();
+
+  // Global Anti-Cheat: Chặn F12, DevTools và View Source trên toàn bộ ứng dụng
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Chặn F12
+      if (e.key === 'F12' || e.keyCode === 123) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+      // Chặn Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C (hoặc Cmd trên Mac)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && ['I', 'J', 'C', 'i', 'j', 'c'].includes(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+      // Chặn Ctrl+U (View Source)
+      if ((e.ctrlKey || e.metaKey) && ['U', 'u'].includes(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      return false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('contextmenu', handleContextMenu, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('contextmenu', handleContextMenu, true);
+    };
+  }, []);
 
   // Render appropriate screen based on game state
   const renderCurrentScreen = () => {
@@ -24,6 +61,8 @@ const AppContent: React.FC = () => {
         return <Login />;
         
       case GameState.GAME_FOUND:
+        return <MatchIntro />;
+        
       case GameState.PLACING_SHIPS:
         return <ShipPlacement />;
         

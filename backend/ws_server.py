@@ -4,7 +4,19 @@ import json
 import uuid
 import random
 import os
+import sys
 from datetime import datetime
+
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+try:
+    from backend import db
+except ImportError:
+    import db
 
 clients = {}  # client_id -> websocket
 queue = []    # Danh sách client_id đang chờ ghép trận
@@ -77,6 +89,58 @@ def save_game_history():
     except Exception as e:
         print(f"[HISTORY] Lỗi ghi file: {e}")
 
+def record_match_result(game_id, reason, winner_id=None):
+    g = games.get(game_id)
+    if not g:
+        return
+    player_ids = g.get('players', [])
+    if len(player_ids) < 2:
+        return
+    p1_id, p2_id = player_ids[0], player_ids[1]
+    p1_name = players.get(p1_id, {}).get('name', 'Player 1')
+    p2_name = players.get(p2_id, {}).get('name', 'Player 2')
+    p1_fleet = players.get(p1_id, {}).get('fleet', 'modern')
+    p2_fleet = players.get(p2_id, {}).get('fleet', 'modern')
+    winner_name = players.get(winner_id, {}).get('name') if winner_id else None
+
+    # Lập chi tiết bàn cờ an toàn sau khi trận đấu kết thúc
+    boards_data = {}
+    for cid in player_ids:
+        b = g.get('boards', {}).get(cid, {})
+        boards_data[cid] = {
+            'player_name': players.get(cid, {}).get('name', ''),
+            'fleet': players.get(cid, {}).get('fleet', 'modern'),
+            'ships': b.get('ships', []),
+            'shots_received': [list(pos) for pos in b.get('shots_received', [])]
+        }
+
+    details = {
+        'boards': boards_data,
+        'reason': reason
+    }
+
+    # 1. Fallback ghi vào game_history.json
+    game_history.append({
+        "game_id": game_id,
+        "players": [p1_name, p2_name],
+        "winner": winner_name,
+        "reason": reason,
+        "timestamp": datetime.now().isoformat(),
+    })
+    save_game_history()
+
+    # 2. Bất đồng bộ lưu vào PostgreSQL (Non-blocking)
+    asyncio.create_task(db.record_game(
+        game_id=game_id,
+        player1_name=p1_name,
+        player2_name=p2_name,
+        winner_name=winner_name,
+        player1_fleet=p1_fleet,
+        player2_fleet=p2_fleet,
+        reason=reason,
+        details=details
+    ))
+
 async def start_turn_timeout(game_id):
     game = games.get(game_id)
     if not game or game['status'] != 'playing':
@@ -96,21 +160,18 @@ async def start_turn_timeout(game_id):
                 }
             })
             game['status'] = 'finished'
-            # Lưu lịch sử
-            game_history.append({
-                "game_id": game_id,
-                "players": [players[p]['name'] for p in game['players']],
-                "winner": players[opponent]['name'],
-                "reason": "timeout",
-                "timestamp": datetime.now().isoformat(),
-            })
-            save_game_history()
+            record_match_result(game_id, "timeout", opponent)
     except Exception as e:
         print(f"[TIMEOUT] Lỗi: {e}")
 
-async def handler(websocket, path):
+async def handler(websocket, path=None):
+    if path is None:
+        try:
+            path = getattr(getattr(websocket, 'request', None), 'path', '/ws/')
+        except Exception:
+            path = '/ws/'
     print(f"[DEBUG] New connection: path={path}")
-    if path != "/ws/":
+    if path and path not in ("/ws/", "/ws", "/"):
         await websocket.close()
         print(f"❌ Wrong path: {path}")
         return
@@ -135,10 +196,20 @@ async def handler(websocket, path):
                 # Xử lý join_queue
                 if msg_type == "join_queue":
                     player_name = msg_data.get("player_name", "")
-                    players[client_id] = {"name": player_name, "websocket": websocket, "ships": [], "ready": False, "shots": []}
+                    fleet = msg_data.get("fleet", "modern")
+                    players[client_id] = {
+                        "name": player_name,
+                        "fleet": fleet,
+                        "websocket": websocket,
+                        "ships": [],
+                        "ready": False,
+                        "shots": []
+                    }
                     if client_id not in queue:
                         queue.append(client_id)
-                    print(f"[QUEUE] {player_name} ({client_id}) vào hàng chờ. Queue: {queue}")
+                    # Tạo hoặc cập nhật thông tin user trong DB (chạy ngầm, không block)
+                    asyncio.create_task(db.get_or_create_user(player_name, fleet))
+                    print(f"[QUEUE] {player_name} [{fleet}] ({client_id}) vào hàng chờ. Queue: {queue}")
                     # Nếu đủ 2 người, ghép trận
                     if len(queue) >= 2:
                         p1, p2 = queue.pop(0), queue.pop(0)
@@ -155,6 +226,7 @@ async def handler(websocket, path):
                         }
                         print(f"[GAME] Ghép trận: {p1} vs {p2} (game_id={game_id})")
                         player_names = {cid: players[cid]["name"] for cid in [p1, p2]}
+                        player_fleets = {cid: players[cid].get("fleet", "modern") for cid in [p1, p2]}
                         # Gửi cho p1
                         await send(p1, {
                             "type": "start_game",
@@ -163,6 +235,7 @@ async def handler(websocket, path):
                                 "room_id": game_id,
                                 "opponent": players[p2]["name"],
                                 "player_names": player_names,
+                                "player_fleets": player_fleets,
                                 "message": "Đã ghép trận! Bắt đầu đặt tàu."
                             }
                         })
@@ -174,7 +247,16 @@ async def handler(websocket, path):
                                 "room_id": game_id,
                                 "opponent": players[p1]["name"],
                                 "player_names": player_names,
+                                "player_fleets": player_fleets,
                                 "message": "Đã ghép trận! Bắt đầu đặt tàu."
+                            }
+                        })
+                    else:
+                        await send(client_id, {
+                            "type": "queue_joined",
+                            "data": {
+                                "position": len(queue),
+                                "message": "Đang tìm đối thủ..."
                             }
                         })
                 # Xử lý đặt tàu
@@ -242,6 +324,7 @@ async def handler(websocket, path):
                     # Kiểm tra trúng tàu
                     hit = False
                     sunk = False
+                    sunk_ship_data = None
                     for ship in board['ships']:
                         positions = [tuple(pos) for pos in ship['positions']]
                         if shot in positions:
@@ -249,6 +332,11 @@ async def handler(websocket, path):
                             # Kiểm tra chìm tàu
                             if all(pos in board['shots_received'] for pos in positions):
                                 sunk = True
+                                sunk_ship_data = {
+                                    "type": ship.get("type"),
+                                    "positions": ship.get("positions"),
+                                    "fleet": players[opponent].get("fleet", "modern")
+                                }
                             break
                     # Kiểm tra thắng/thua
                     win = check_all_ships_sunk(board)
@@ -268,6 +356,7 @@ async def handler(websocket, path):
                         next_turn = None
                     # Gửi cập nhật cho cả 2
                     player_names = {cid: players[cid]["name"] for cid in game['players']}
+                    player_fleets = {cid: players[cid].get("fleet", "modern") for cid in game['players']}
                     await broadcast(game['players'], {
                         "type": "game_update",
                         "data": {
@@ -275,11 +364,13 @@ async def handler(websocket, path):
                             "by": client_id,
                             "hit": hit,
                             "sunk": sunk,
+                            "sunk_ship": sunk_ship_data,
                             "turn": next_turn,
                             "status": game['status'],
                             "winner": client_id if win else None,
                             "timeout": TURN_TIMEOUT if not win else None,
                             "player_names": player_names,
+                            "player_fleets": player_fleets,
                             "room_id": game_id
                         }
                     })
@@ -293,15 +384,7 @@ async def handler(websocket, path):
                                 "player_names": player_names
                             }
                         })
-                        # Lưu lịch sử
-                        game_history.append({
-                            "game_id": game_id,
-                            "players": [players[p]['name'] for p in game['players']],
-                            "winner": players[client_id]['name'],
-                            "reason": "win",
-                            "timestamp": datetime.now().isoformat(),
-                        })
-                        save_game_history()
+                        record_match_result(game_id, "win", client_id)
                     else:
                         # Bắt đầu timeout cho lượt mới
                         game['timeout_task'] = asyncio.create_task(start_turn_timeout(game_id))
@@ -339,15 +422,25 @@ async def handler(websocket, path):
                             }
                         })
                         games[game_id]['status'] = 'finished'
-                        # Lưu lịch sử
-                        game_history.append({
-                            "game_id": game_id,
-                            "players": [players[p]['name'] for p in games[game_id]['players']],
-                            "winner": players[opponent]['name'],
-                            "reason": "surrender",
-                            "timestamp": datetime.now().isoformat(),
-                        })
-                        save_game_history()
+                        record_match_result(game_id, "surrender", opponent)
+                # Lấy Bảng xếp hạng từ PostgreSQL
+                elif msg_type == "get_leaderboard":
+                    limit = int(msg_data.get("limit", 10))
+                    lb = await db.get_leaderboard(limit)
+                    await websocket.send(json.dumps({
+                        "type": "leaderboard_data",
+                        "data": lb
+                    }))
+                # Lấy Lịch sử trận đấu
+                elif msg_type == "get_history":
+                    limit = int(msg_data.get("limit", 20))
+                    history = await db.get_recent_games(limit)
+                    if not history and game_history:
+                        history = list(reversed(game_history))[:limit]
+                    await websocket.send(json.dumps({
+                        "type": "history_data",
+                        "data": history
+                    }))
                 else:
                     # Echo lại các message khác (giữ nguyên logic cũ)
                     await websocket.send(json.dumps({
@@ -367,31 +460,41 @@ async def handler(websocket, path):
         print(f"❌ Exception in handler for {client_id}: {e}")
     finally:
         print(f"[DEBUG] Client {client_id} disconnected")
-        clients.pop(client_id, None)
-        players.pop(client_id, None)
+        client_name = players.get(client_id, {}).get('name', 'Đối thủ')
         if client_id in queue:
             queue.remove(client_id)
-        # Dọn dẹp game nếu cần
+        # Xử lý các ván game đang diễn ra: Xử thua ngay lập tức nếu đối thủ ngắt kết nối
         for gid, g in list(games.items()):
             if client_id in g['players']:
-                # Lưu lịch sử nếu game chưa kết thúc
                 if g['status'] != 'finished':
                     opponent = [p for p in g['players'] if p != client_id][0]
-                    game_history.append({
-                        "game_id": gid,
-                        "players": [players.get(p, {'name': p})['name'] for p in g['players']],
-                        "winner": players.get(opponent, {'name': opponent})['name'],
-                        "reason": "disconnect",
-                        "timestamp": datetime.now().isoformat(),
+                    g['status'] = 'finished'
+                    player_names = {cid: players.get(cid, {}).get("name", cid) for cid in g['players']}
+                    player_names[client_id] = client_name
+                    # Gửi thông báo chiến thắng ngay lập tức cho người chơi còn lại
+                    await send(opponent, {
+                        "type": "game_over",
+                        "data": {
+                            "winner": opponent,
+                            "message": f"{client_name} đã mất kết nối! Bạn được xử thắng ván đấu này.",
+                            "room_id": gid,
+                            "reason": "disconnect",
+                            "player_names": player_names
+                        }
                     })
-                    save_game_history()
+                    record_match_result(gid, "disconnect", opponent)
                 # Hủy timeout nếu còn
                 if g.get('timeout_task'):
                     g['timeout_task'].cancel()
                 del games[gid]
+        clients.pop(client_id, None)
+        players.pop(client_id, None)
 
 async def main():
-    # Load lịch sử nếu có
+    # Khởi tạo kết nối PostgreSQL (có Graceful Fallback)
+    await db.init_db()
+
+    # Load lịch sử file nếu có
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
@@ -399,9 +502,15 @@ async def main():
                 game_history = json.load(f)
         except Exception as e:
             print(f"[HISTORY] Lỗi đọc file: {e}")
-    print("🚢 WebSocket Battle Ship Server đang chạy tại ws://0.0.0.0:8888/ws/")
-    async with websockets.serve(handler, "0.0.0.0", 8888):
-        await asyncio.Future()  # Run forever
+
+    host = os.getenv("BATTLESHIP_HOST", "0.0.0.0")
+    port = int(os.getenv("BATTLESHIP_PORT", "8888"))
+    print(f"🚢 WebSocket Battle Ship Server đang chạy tại ws://{host}:{port}/ws/")
+    try:
+        async with websockets.serve(handler, host, port):
+            await asyncio.Future()  # Run forever
+    finally:
+        await db.close_db()
 
 if __name__ == "__main__":
     asyncio.run(main()) 

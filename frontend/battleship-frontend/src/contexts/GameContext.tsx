@@ -12,6 +12,9 @@ import {
   ChatMessage,
   ShipType,
   SHIP_CONFIGS,
+  SunkShip,
+  SunkEventData,
+  FleetType,
   ConnectionSuccessData,
   QueueJoinedData,
   GameFoundData,
@@ -37,6 +40,11 @@ interface GameContextState {
   playerName: string;
   opponentName: string;
 
+  // Fleet choice
+  selectedFleet: FleetType;
+  myFleet: FleetType;
+  opponentFleet: FleetType;
+
   // Queue
   queuePosition: number;
 
@@ -49,6 +57,8 @@ interface GameContextState {
   myBoard: CellState[][];
   opponentBoard: CellState[][];
   myShips: Ship[];
+  mySunkShips: SunkShip[];
+  opponentSunkShips: SunkShip[];
   
   // Ship placement
   availableShips: Record<ShipType, number>;
@@ -63,6 +73,7 @@ interface GameContextState {
   hoveredCell: Position | null;
   winner: string | null;
   turnTimeLeft: number;
+  latestSunkEvent: SunkEventData | null;
 }
 
 // Actions
@@ -71,6 +82,7 @@ type GameAction =
   | { type: 'SET_ERROR'; payload: string | null }
   | { type: 'SET_CLIENT_ID'; payload: string }
   | { type: 'SET_PLAYER_NAME'; payload: string }
+  | { type: 'SET_SELECTED_FLEET'; payload: FleetType }
   | { type: 'SET_QUEUE_POSITION'; payload: number }
   | { type: 'GAME_FOUND'; payload: GameFoundData }
   | { type: 'START_SHIP_PLACEMENT' }
@@ -83,7 +95,10 @@ type GameAction =
   | { type: 'ADD_CHAT_MESSAGE'; payload: ChatMessage }
   | { type: 'SET_SELECTED_SHIP_TYPE'; payload: ShipType | null }
   | { type: 'SET_HOVERED_CELL'; payload: Position | null }
+  | { type: 'SET_PLAYER_FLEETS'; payload: { myFleet: FleetType; opponentFleet: FleetType } }
   | { type: 'RESET_GAME' }
+  | { type: 'RESET_PLACEMENT' }
+  | { type: 'SET_ALL_PLACED_SHIPS'; payload: Ship[] }
   | { type: 'GAME_UPDATE'; payload: any }
   | { type: 'TICK_TIMER' };
 
@@ -95,6 +110,9 @@ const initialState: GameContextState = {
   error: null,
   playerName: '',
   opponentName: '',
+  selectedFleet: 'modern',
+  myFleet: 'modern',
+  opponentFleet: 'modern',
   queuePosition: 0,
   gameState: GameState.DISCONNECTED,
   roomId: null,
@@ -102,6 +120,8 @@ const initialState: GameContextState = {
   myBoard: createEmptyBoard(),
   opponentBoard: createEmptyBoard(),
   myShips: [],
+  mySunkShips: [],
+  opponentSunkShips: [],
   availableShips: {
     [ShipType.DESTROYER]: SHIP_CONFIGS[ShipType.DESTROYER].count,
     [ShipType.SUBMARINE]: SHIP_CONFIGS[ShipType.SUBMARINE].count,
@@ -115,6 +135,7 @@ const initialState: GameContextState = {
   hoveredCell: null,
   winner: null,
   turnTimeLeft: 30,
+  latestSunkEvent: null,
 };
 
 // Reducer
@@ -122,6 +143,9 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
   switch (action.type) {
     case 'SET_CONNECTION_STATE':
       return { ...state, connectionState: action.payload };
+      
+    case 'SET_SELECTED_FLEET':
+      return { ...state, selectedFleet: action.payload, myFleet: action.payload };
       
     case 'SET_ERROR':
       return { ...state, error: action.payload };
@@ -190,6 +214,42 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
         myBoard: updatedBoard,
         myShips: state.myShips.filter((_, i) => i !== shipIndex)
       };
+
+    case 'RESET_PLACEMENT':
+      return {
+        ...state,
+        placedShips: [],
+        availableShips: {
+          [ShipType.DESTROYER]: SHIP_CONFIGS[ShipType.DESTROYER].count,
+          [ShipType.SUBMARINE]: SHIP_CONFIGS[ShipType.SUBMARINE].count,
+          [ShipType.CRUISER]: SHIP_CONFIGS[ShipType.CRUISER].count,
+          [ShipType.BATTLESHIP]: SHIP_CONFIGS[ShipType.BATTLESHIP].count,
+        },
+        myBoard: createEmptyBoard(),
+        myShips: []
+      };
+
+    case 'SET_ALL_PLACED_SHIPS': {
+      const allShips = action.payload;
+      const allShipsBoard = createEmptyBoard();
+      allShips.forEach(ship => {
+        ship.positions.forEach(pos => {
+          allShipsBoard[pos.row][pos.col] = CellState.SHIP;
+        });
+      });
+      return {
+        ...state,
+        placedShips: allShips,
+        availableShips: {
+          [ShipType.DESTROYER]: 0,
+          [ShipType.SUBMARINE]: 0,
+          [ShipType.CRUISER]: 0,
+          [ShipType.BATTLESHIP]: 0,
+        },
+        myBoard: allShipsBoard,
+        myShips: allShips
+      };
+    }
       
     case 'SHIPS_PLACEMENT_COMPLETE':
       return { 
@@ -206,7 +266,7 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
         roomId: 'room_id' in action.payload ? String((action.payload as any).room_id) || state.roomId : state.roomId
       };
       
-    case 'SHOT_RESULT':
+    case 'SHOT_RESULT': {
       const { row, col, result, current_turn, shooter } = action.payload;
       const isMyShot = shooter === state.clientId;
       
@@ -215,17 +275,56 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
       const updatedShotBoard = boardToUpdate.map((boardRow, r) =>
         boardRow.map((cell, c) => {
           if (r === row && c === col) {
-            return result === 'hit' ? CellState.HIT : CellState.MISS;
+            return result === 'hit' || result === 'sunk' ? CellState.HIT : CellState.MISS;
           }
           return cell;
         })
       );
+
+      let mySunkShips = state.mySunkShips;
+      let opponentSunkShips = state.opponentSunkShips;
+      let latestSunkEvent = state.latestSunkEvent;
+      if (result === 'sunk' && action.payload.sunk_ship) {
+        const rawPositions = action.payload.sunk_ship.positions || [];
+        const positions: Position[] = rawPositions.map((p: any) => ({ row: p[0], col: p[1] }));
+        const isHorizontal = positions.length > 1 ? positions[0].row === positions[1].row : true;
+        const newSunkShip: SunkShip = {
+          type: action.payload.sunk_ship.type as ShipType,
+          positions,
+          isHorizontal,
+          fleet: action.payload.sunk_ship.fleet || (isMyShot ? state.opponentFleet : state.myFleet)
+        };
+        latestSunkEvent = {
+          type: newSunkShip.type,
+          fleet: newSunkShip.fleet || (isMyShot ? state.opponentFleet : state.myFleet),
+          isEnemy: isMyShot,
+          positions,
+          timestamp: Date.now()
+        };
+        if (isMyShot) {
+          const exists = opponentSunkShips.some(s =>
+            s.positions.length === positions.length &&
+            s.positions.every((p, idx) => p.row === positions[idx]?.row && p.col === positions[idx]?.col)
+          );
+          if (!exists) opponentSunkShips = [...opponentSunkShips, newSunkShip];
+        } else {
+          const exists = mySunkShips.some(s =>
+            s.positions.length === positions.length &&
+            s.positions.every((p, idx) => p.row === positions[idx]?.row && p.col === positions[idx]?.col)
+          );
+          if (!exists) mySunkShips = [...mySunkShips, newSunkShip];
+        }
+      }
       
       return {
         ...state,
         ...(isMyShot ? { opponentBoard: updatedShotBoard } : { myBoard: updatedShotBoard }),
+        mySunkShips,
+        opponentSunkShips,
+        latestSunkEvent,
         isMyTurn: current_turn === state.clientId
       };
+    }
       
     case 'GAME_OVER':
       return { 
@@ -245,6 +344,13 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
     case 'SET_SELECTED_SHIP_TYPE':
       return { ...state, selectedShipType: action.payload };
       
+    case 'SET_PLAYER_FLEETS':
+      return {
+        ...state,
+        myFleet: action.payload.myFleet,
+        opponentFleet: action.payload.opponentFleet
+      };
+
     case 'SET_HOVERED_CELL':
       return { ...state, hoveredCell: action.payload };
       
@@ -254,6 +360,12 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
         connectionState: state.connectionState,
         clientId: state.clientId,
         playerName: state.playerName,
+        selectedFleet: state.selectedFleet,
+        myFleet: state.selectedFleet,
+        opponentFleet: 'modern',
+        mySunkShips: [],
+        opponentSunkShips: [],
+        latestSunkEvent: null,
         turnTimeLeft: 30
       };
       
@@ -267,6 +379,9 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
       // Cập nhật bảng khi có shot mới
       let myBoard = state.myBoard;
       let opponentBoard = state.opponentBoard;
+      let mySunkShips = state.mySunkShips;
+      let opponentSunkShips = state.opponentSunkShips;
+
       if (action.payload.shot) {
         const { row, col } = action.payload.shot;
         const isMyShot = action.payload.by === state.clientId;
@@ -286,6 +401,42 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
           );
         }
       }
+
+      // Cập nhật tàu chìm nếu có
+      let latestSunkEvent = state.latestSunkEvent;
+      if (action.payload.sunk && action.payload.sunk_ship) {
+        const rawPositions = action.payload.sunk_ship.positions || [];
+        const positions: Position[] = rawPositions.map((p: any) => ({ row: p[0], col: p[1] }));
+        const isHorizontal = positions.length > 1 ? positions[0].row === positions[1].row : true;
+        const isMyShot = action.payload.by === state.clientId;
+        const newSunkShip: SunkShip = {
+          type: action.payload.sunk_ship.type as ShipType,
+          positions,
+          isHorizontal,
+          fleet: action.payload.sunk_ship.fleet || (isMyShot ? state.opponentFleet : state.myFleet)
+        };
+        latestSunkEvent = {
+          type: newSunkShip.type,
+          fleet: newSunkShip.fleet || (isMyShot ? state.opponentFleet : state.myFleet),
+          isEnemy: isMyShot,
+          positions,
+          timestamp: Date.now()
+        };
+        if (isMyShot) {
+          const exists = opponentSunkShips.some(s =>
+            s.positions.length === positions.length &&
+            s.positions.every((p, idx) => p.row === positions[idx]?.row && p.col === positions[idx]?.col)
+          );
+          if (!exists) opponentSunkShips = [...opponentSunkShips, newSunkShip];
+        } else {
+          const exists = mySunkShips.some(s =>
+            s.positions.length === positions.length &&
+            s.positions.every((p, idx) => p.row === positions[idx]?.row && p.col === positions[idx]?.col)
+          );
+          if (!exists) mySunkShips = [...mySunkShips, newSunkShip];
+        }
+      }
+
       // Lấy timeout từ payload nếu có
       const turnTimeLeft = typeof action.payload.timeout === 'number' ? action.payload.timeout : state.turnTimeLeft;
       // Cập nhật opponentName nếu có player_names
@@ -296,14 +447,29 @@ const gameReducer = (state: GameContextState, action: GameAction): GameContextSt
           .filter(([id]) => id !== state.clientId)
           .map(([_, name]) => String(name))[0] || state.opponentName;
       }
+      // Cập nhật player_fleets nếu có
+      let myFleet = state.myFleet;
+      let opponentFleet = state.opponentFleet;
+      if (action.payload.player_fleets && state.clientId) {
+        myFleet = (action.payload.player_fleets[state.clientId] as FleetType) || state.myFleet;
+        const oppId = Object.keys(action.payload.player_fleets).find(id => id !== state.clientId);
+        if (oppId) {
+          opponentFleet = (action.payload.player_fleets[oppId] as FleetType) || state.opponentFleet;
+        }
+      }
       return {
         ...state,
         gameState: action.payload.status === 'playing' ? GameState.PLAYING : state.gameState,
         isMyTurn: action.payload.turn === action.payload.clientId,
         myBoard,
         opponentBoard,
+        mySunkShips,
+        opponentSunkShips,
+        latestSunkEvent,
         turnTimeLeft,
         opponentName,
+        myFleet,
+        opponentFleet,
         roomId: action.payload.room_id || state.roomId,
       };
     }
@@ -323,11 +489,14 @@ const GameContext = createContext<{
     leaveQueue: () => void;
     placeShip: (shipType: ShipType, startPos: Position, isHorizontal: boolean) => boolean;
     removeShip: (shipIndex: number) => void;
+    resetPlacement: () => void;
+    setAllPlacedShips: (ships: Ship[]) => void;
     completeShipPlacement: () => void;
     fireShot: (row: number, col: number) => void;
     sendChatMessage: (message: string) => void;
     surrender: () => void;
     resetGame: () => void;
+    setSelectedFleet: (fleet: FleetType) => void;
   };
 } | null>(null);
 
@@ -361,7 +530,6 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Game found
     websocketService.on('game_found', (data: GameFoundData) => {
       dispatch({ type: 'GAME_FOUND', payload: data });
-      dispatch({ type: 'START_SHIP_PLACEMENT' });
     });
 
     // Ships placed
@@ -416,19 +584,29 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     // Thêm handler cho start_game từ backend
     websocketService.on('start_game', (data: any) => {
-      // Lưu thông tin đối thủ, game_id nếu cần
+      // Lưu thông tin đối thủ, game_id và đội hình hạm đội
       dispatch({ type: 'SET_CONNECTION_STATE', payload: GameState.GAME_FOUND });
-      dispatch({ type: 'START_SHIP_PLACEMENT' });
+      if (data.opponent) {
+        dispatch({
+          type: 'GAME_FOUND',
+          payload: {
+            opponent: data.opponent,
+            your_turn: false,
+            room_id: data.room_id || data.game_id,
+            message: data.message || 'Đã ghép trận! Bắt đầu đặt tàu.'
+          }
+        });
+      }
+      if (data.player_fleets && clientIdRef.current) {
+        const myF = (data.player_fleets[clientIdRef.current] as FleetType) || 'modern';
+        const oppId = Object.keys(data.player_fleets).find(id => id !== clientIdRef.current);
+        const oppF = oppId ? ((data.player_fleets[oppId] as FleetType) || 'modern') : 'modern';
+        dispatch({ type: 'SET_PLAYER_FLEETS', payload: { myFleet: myF, opponentFleet: oppF } });
+      }
     });
 
     // Thêm handler cho game_update từ backend
     websocketService.on('game_update', (data: any) => {
-      console.log('DEBUG GAME_UPDATE:', {
-        clientId: clientIdRef.current,
-        turn: data.turn,
-        isMyTurn: data.turn === clientIdRef.current,
-        data
-      });
       dispatch({ type: 'GAME_UPDATE', payload: { ...data, clientId: clientIdRef.current } });
     });
 
@@ -462,12 +640,16 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     joinQueue: () => {
       if (state.playerName.trim()) {
-        websocketService.joinQueue(state.playerName);
+        websocketService.joinQueue(state.playerName, state.selectedFleet);
       }
     },
 
     leaveQueue: () => {
       websocketService.leaveQueue();
+    },
+
+    setSelectedFleet: (fleet: FleetType) => {
+      dispatch({ type: 'SET_SELECTED_FLEET', payload: fleet });
     },
 
     placeShip: (shipType: ShipType, startPos: Position, isHorizontal: boolean): boolean => {
@@ -513,6 +695,15 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     removeShip: (shipIndex: number) => {
       dispatch({ type: 'REMOVE_SHIP', payload: shipIndex });
+    },
+
+    resetPlacement: () => {
+      dispatch({ type: 'RESET_PLACEMENT' });
+    },
+
+    setAllPlacedShips: (ships: Ship[]) => {
+      dispatch({ type: 'SET_ALL_PLACED_SHIPS', payload: ships });
+      audioService.playGameSound('place');
     },
 
     completeShipPlacement: () => {
